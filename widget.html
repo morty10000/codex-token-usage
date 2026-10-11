@@ -1,0 +1,128 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="color-scheme" content="light dark">
+<title>Token 用量悬浮条</title>
+<style>
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; background: transparent; overflow: hidden; }
+  html { color-scheme: light dark; }
+  body { font: 13px/1.4 system-ui, "Segoe UI", "Microsoft YaHei", sans-serif; }
+
+  a.card {
+    display: flex; align-items: center;
+    height: 30px; margin: 5px; padding: 0 12px;
+    border-radius: 999px; text-decoration: none; cursor: pointer;
+    background: rgba(255, 255, 255, 0.92);
+    border: 1px solid rgba(17, 24, 28, 0.10);
+    box-shadow: 0 4px 16px rgba(17, 24, 28, 0.14);
+    backdrop-filter: blur(10px);
+  }
+  .cell { flex: 1; display: flex; flex-direction: row; align-items: center; justify-content: center; gap: 6px; white-space: nowrap; }
+  .label { font-size: 11px; letter-spacing: 0.04em; color: #6b7280; }
+  .val { font-size: 13px; font-weight: 600; color: #111418; font-variant-numeric: tabular-nums; }
+  .sep { width: 1px; height: 14px; background: rgba(17, 24, 28, 0.10); flex: none; }
+  .dot { width: 6px; height: 6px; border-radius: 50%; background: #cbd5e1; margin: 0 6px 0 0; flex: none; }
+  .dot.ok { background: #22c55e; }
+  .dot.stale { background: #f59e0b; }
+  .dot.err { background: #ef4444; }
+  .val.bump { animation: bump 0.7s ease; }
+  @keyframes bump {
+    0% { transform: scale(1); color: #0ea5e9; }
+    40% { transform: scale(1.12); }
+    100% { transform: scale(1); }
+  }
+  @media (prefers-color-scheme: dark) {
+    a.card { background: rgba(32, 33, 36, 0.92); border-color: rgba(255, 255, 255, 0.10); box-shadow: 0 4px 16px rgba(0, 0, 0, 0.45); }
+    .label { color: #9aa0a6; }
+    .val { color: #e8eaed; }
+    .sep { background: rgba(255, 255, 255, 0.12); }
+  }
+</style>
+</head>
+<body>
+<a class="card" href="http://127.0.0.1:8788/" target="_blank" rel="noopener" title="打开完整看板">
+  <span class="dot" id="dot"></span>
+  <span class="cell"><span class="label">今日</span><span class="val" id="v-today">…</span></span>
+  <span class="sep"></span>
+  <span class="cell"><span class="label">近 7 天</span><span class="val" id="v-7d">…</span></span>
+  <span class="sep"></span>
+  <span class="cell"><span class="label">总计</span><span class="val" id="v-all">…</span></span>
+</a>
+<script>
+(function () {
+  'use strict';
+  var lastToday = -1;
+
+  function pad2(n) { return (n < 10 ? '0' : '') + n; }
+  function trimNum(s) { return s.replace(/\.0+$/, '').replace(/(\.\d)0+$/, '$1'); }
+  function fmt(n) {
+    n = Math.round(n);
+    if (n >= 1e8) return trimNum((n / 1e8).toFixed(2)) + '亿';
+    if (n >= 1e4) return trimNum((n / 1e4).toFixed(1)) + '万';
+    return String(n);
+  }
+  function dayKey(ts) {
+    var d = new Date(ts * 1000);
+    return d.getFullYear() + '-' + pad2(d.getMonth() + 1) + '-' + pad2(d.getDate());
+  }
+  function setDot(cls, tip) {
+    var d = document.getElementById('dot');
+    d.className = 'dot' + (cls ? ' ' + cls : '');
+    d.title = tip || '';
+  }
+
+  function render(data) {
+    var recs = data.records || [];
+    var today = dayKey(Date.now() / 1000);
+    var midnight = new Date(); midnight.setHours(0, 0, 0, 0);
+    var c7 = Math.floor(midnight.getTime() / 1000) - 6 * 86400;
+    var t0 = 0, t7 = 0, all = 0;
+    for (var i = 0; i < recs.length; i++) {
+      var r = recs[i];
+      var v = (r.i | 0) + (r.o | 0) + (r.r | 0) + (r.w | 0);
+      all += v;
+      if (r.t >= c7) t7 += v;
+      if (dayKey(r.t) === today) t0 += v;
+    }
+    var el0 = document.getElementById('v-today');
+    if (lastToday >= 0 && t0 !== lastToday) {
+      el0.classList.remove('bump');
+      void el0.offsetWidth;
+      el0.classList.add('bump');
+    }
+    lastToday = t0;
+    el0.textContent = fmt(t0);
+    el0.title = t0.toLocaleString('zh-CN') + ' tokens';
+    document.getElementById('v-7d').textContent = fmt(t7);
+    document.getElementById('v-7d').title = t7.toLocaleString('zh-CN') + ' tokens';
+    document.getElementById('v-all').textContent = fmt(all);
+    document.getElementById('v-all').title = all.toLocaleString('zh-CN') + ' tokens';
+
+    var age = Date.now() - new Date(data.generatedAt || 0).getTime();
+    if (isFinite(age) && age >= 0) {
+      if (age < 3 * 60 * 1000) setDot('ok', '数据更新于 ' + data.generatedAtLocal);
+      else setDot('stale', '数据可能滞后（' + Math.round(age / 60000) + ' 分钟前）');
+    } else {
+      setDot('', '');
+    }
+  }
+
+  function refresh() {
+    fetch('data.js?t=' + Date.now(), { cache: 'no-store' })
+      .then(function (r) { if (!r.ok) throw new Error(String(r.status)); return r.text(); })
+      .then(function (txt) {
+        var eq = txt.indexOf('=');
+        render(JSON.parse(txt.slice(eq + 1).trim().replace(/;+\s*$/, '')));
+      })
+      .catch(function () { setDot('err', '看板服务未启动或 data.js 不可读'); });
+  }
+
+  refresh();
+  setInterval(refresh, 60000);
+  document.addEventListener('visibilitychange', function () { if (!document.hidden) refresh(); });
+})();
+</script>
+</body>
+</html>

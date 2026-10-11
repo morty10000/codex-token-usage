@@ -1,0 +1,24 @@
+{
+  "name": "codex-token-usage",
+  "version": "0.1.4",
+  "description": "把 cc-switch 记录的 token 用量、成本与请求统计直接显示在 Codex 对话里，并可把完整看板挂进内置浏览器面板。",
+  "author": {
+    "name": "morty10000"
+  },
+  "license": "MIT",
+  "keywords": ["token", "usage", "cost", "cc-switch", "dashboard", "统计"],
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "Token 用量",
+    "shortDescription": "在对话里查看 token 用量与成本",
+    "longDescription": "读取 cc-switch 代理日志，把今日 / 近 7 天 / 近 30 天的 token 用量、缓存命中、模型与供应商分布、最近请求以可交互图表呈现在 Codex 对话中；也可以把完整用量看板挂进内置浏览器面板常驻显示。",
+    "developerName": "morty10000",
+    "category": "Productivity",
+    "capabilities": ["Interactive", "Read"],
+    "composerIcon": "./assets/icon.svg",
+    "logo": "./assets/logo.svg",
+    "defaultPrompt": ["看一下今天的 token 用量和花费", "把 token 用量看板挂进窗口", "这周哪个模型消耗最多"],
+    "brandColor": "#10A37F",
+    "screenshots": []
+  }
+}

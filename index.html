@@ -1,0 +1,1882 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>cc-switch Token 用量统计</title>
+<style>
+  :root {
+    color-scheme: light;
+    --bg:       #f6f7f9;
+    --panel:    #ffffff;
+    --panel-2:  #ffffff;
+    --border:   #e4e6ea;
+    --border-2: #eef0f3;
+    --fg:       #1f2328;
+    --fg-dim:   #57606a;
+    --fg-mute:  #8c959f;
+    --in:       #4c8dff;   /* 输入 */
+    --out:      #34a853;   /* 输出 */
+    --cache:    #8b5cf6;   /* 缓存读 */
+    --err:      #d93025;
+    --accent:   #b45309;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body {
+    background: var(--bg);
+    color: var(--fg);
+    font: 13px/1.6 system-ui, -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif;
+    padding: 22px 18px 60px;
+    -webkit-font-smoothing: antialiased;
+  }
+  .wrap { max-width: 1500px; margin: 0 auto; }
+
+  /* ── 今日一行 ─────────────────────────────────────── */
+  .today {
+    display: flex; align-items: center; flex-wrap: wrap;
+    gap: 0 26px;
+    background: linear-gradient(135deg, #eef4ff 0%, #f4f7fd 100%);
+    border: 1px solid #d3e2ff;
+    border-radius: 10px;
+    padding: 13px 18px;
+    margin-bottom: 14px;
+  }
+  .today .hd {
+    display: flex; flex-direction: column; gap: 2px;
+    padding-right: 24px; border-right: 1px solid #d3e2ff;
+    flex: 0 0 auto;
+  }
+  .today .hd .t {
+    font-size: 13px; font-weight: 600; color: #1a56c4;
+    display: flex; align-items: center; gap: 6px;
+  }
+  .today .hd .d { font-size: 11px; color: #6b7f9e; font-variant-numeric: tabular-nums; }
+  .today .hd .live {
+    width: 6px; height: 6px; border-radius: 50%;
+    background: #34a853; box-shadow: 0 0 0 3px rgba(52,168,83,.16);
+  }
+  .today .hd .stale {
+    width: 6px; height: 6px; border-radius: 50%;
+    background: #f59e0b; box-shadow: 0 0 0 3px rgba(245,158,11,.16);
+  }
+  .today .st { display: flex; align-items: baseline; gap: 7px; flex: 0 0 auto; }
+  .today .st .k { font-size: 11px; color: #6b7f9e; }
+  .today .st .v {
+    font-size: 17px; font-weight: 600; color: #1f2328;
+    font-variant-numeric: tabular-nums;
+  }
+  .today .st .v.hl { color: #1a56c4; }
+  .today .st .v .u { font-size: 11px; font-weight: 400; color: #8c959f; margin-left: 3px; }
+  @media (max-width: 900px) {
+    .today { gap: 10px 20px; }
+    .today .hd { border-right: none; padding-right: 0; }
+  }
+  .today .hd .neutral {
+    width: 6px; height: 6px; border-radius: 50%;
+    background: #94a3b8; box-shadow: 0 0 0 3px rgba(148,163,184,.16);
+  }
+  /* 历史总计：沿用「今日」行的盒子样式，仅改用中性配色以便区分 */
+  .today.hist {
+    background: linear-gradient(135deg, #f1f4f9 0%, #f8fafc 100%);
+    border-color: #dde4ec;
+  }
+  .today.hist .hd { border-right-color: #dde4ec; }
+  .today.hist .hd .t { color: #3d5066; }
+  .today.hist .hd .d, .today.hist .st .k { color: #7b8794; }
+
+  /* ── 并列容器（两列网格，窄屏自动堆叠） ───────────── */
+  .pair {
+    display: grid; gap: 14px; margin-bottom: 14px;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    align-items: stretch;
+  }
+  /* 并排保持到 860px，仅在更窄时才堆叠 */
+  @media (max-width: 860px) { .pair { grid-template-columns: minmax(0, 1fr); } }
+  .pair > .panel, .pair > .today { margin-bottom: 0; }
+  /* 3:7 分栏（左窄右宽），且左右两盒等高 */
+  .pair-37 {
+    grid-template-columns: minmax(0, 3fr) minmax(0, 7fr);
+    align-items: stretch;
+  }
+  .pair-37 > .panel { display: flex; flex-direction: column; }
+  /*
+   * 扇形图不能参与 flex 拉伸：画布的绘制尺寸由 JS 按固定高度算好，
+   * 被拉高就会纵向变形（圆环变椭圆）。富余高度只给下方的注释区，
+   * 条目过多时在注释区内滚动，不撑破卡片。
+   */
+  .pair-37 > .panel > canvas { flex: 0 0 auto; }
+  .pair-37 > .panel > .plegend { flex: 1 1 auto; min-height: 0; overflow-y: auto; }
+  @media (max-width: 980px) { .pair-37 { grid-template-columns: minmax(0, 1fr); } }
+
+  /* 并列状态下的统计条：标题占整行，指标两行三列 */
+  .pair .today {
+    flex-direction: column; align-items: stretch;
+    flex-wrap: nowrap; gap: 11px;
+  }
+  .pair .today .hd {
+    border-right: none; padding-right: 0;
+    padding-bottom: 10px; border-bottom: 1px solid #d3e2ff;
+  }
+  .pair .today.hist .hd { border-bottom-color: #dde4ec; }
+  .pair .today .stats {
+    display: grid; gap: 9px 16px;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+  /* 并排但较窄时，指标改两列：否则「标签 + 数值」会被压缩换行 */
+  @media (min-width: 861px) and (max-width: 1080px) {
+    .pair .today .stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  }
+  @media (max-width: 620px) {
+    .pair .today .stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  }
+  .pair .today .st { flex-wrap: wrap; gap: 2px 7px; }
+
+  /* ── 扇形图下方的注释（按供应商 / 按模型共用） ───────
+     宽面板自动排两列，窄面板单列；条目过多时由容器滚动。 */
+  .plegend {
+    margin-top: 12px; padding-top: 11px;
+    border-top: 1px solid var(--border-2);
+    display: grid; gap: 10px 24px; align-content: start;
+    grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  }
+  .plegend .row {
+    display: grid; gap: 8px; align-items: start;
+    grid-template-columns: 10px minmax(0, 1fr) auto;
+    font-size: 12px; min-width: 0;
+  }
+  .plegend .sw { width: 10px; height: 10px; border-radius: 2px; margin-top: 4px; }
+  .plegend .nm {
+    min-width: 0; display: flex; flex-direction: column; gap: 1px;
+  }
+  .plegend .nm .tx {
+    display: flex; align-items: baseline; gap: 6px;
+    min-width: 0; white-space: nowrap;
+  }
+  .plegend .nm .tx .name {
+    min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .plegend .nm .tx .dim,
+  .plegend .nm .tx .tag { flex: 0 0 auto; }
+  .plegend .meta {
+    display: block; color: var(--fg-mute); font-size: 10px; line-height: 1.5;
+    font-variant-numeric: tabular-nums;
+  }
+  .plegend .val {
+    text-align: right; font-weight: 600; white-space: nowrap;
+    font-variant-numeric: tabular-nums;
+  }
+  .plegend .val .pct {
+    color: var(--fg-mute); font-weight: 400; font-size: 11px; margin-left: 6px;
+  }
+  .plegend .more { grid-column: 1 / -1; color: var(--fg-mute); font-size: 11px; }
+
+  /* ── 今日图表（饼图 + 柱形图并列一行） ─────────────── */
+  .duo {
+    display: grid; gap: 14px; margin-bottom: 14px;
+    grid-template-columns: minmax(0, .85fr) minmax(0, 1.15fr);
+  }
+  @media (max-width: 860px) { .duo { grid-template-columns: minmax(0, 1fr); } }
+  .duo .panel { margin-bottom: 0; }
+
+  /* ── 今日图表的「供应商 / 模型」署名 ───────────────── */
+  .bd {
+    margin-top: 12px; padding-top: 11px;
+    border-top: 1px solid var(--border-2);
+    display: grid; gap: 7px;
+  }
+  .bd .row { display: flex; flex-wrap: wrap; gap: 7px; align-items: flex-start; }
+  .bd .lb {
+    color: var(--fg-mute); font-size: 11px; letter-spacing: .04em;
+    flex: 0 0 42px; padding-top: 3px;
+  }
+  .chip {
+    display: inline-flex; align-items: baseline; gap: 6px;
+    background: #f6f8fa; border: 1px solid var(--border);
+    border-radius: 999px; padding: 2px 10px 3px;
+    font-size: 11px; max-width: 100%;
+  }
+  .chip .nm {
+    color: var(--fg); font-weight: 500;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    max-width: 210px;
+  }
+  .chip .n {
+    color: var(--fg-dim); font-size: 10px;
+    font-variant-numeric: tabular-nums;
+  }
+  .chip .pct { color: var(--fg-mute); font-size: 10px; }
+  .chip.cur { background: #eef4ff; border-color: #cfe0ff; }
+  .chip.cur .nm { color: #1a56c4; }
+
+  /* ── 面板 ─────────────────────────────────────────── */
+  .panel {
+    background: var(--panel); border: 1px solid var(--border);
+    border-radius: 10px; padding: 16px 18px; margin-bottom: 14px;
+    box-shadow: 0 1px 2px rgba(16,24,40,.04);
+  }
+  .panel h2 {
+    font-size: 13px; margin: 0 0 14px; font-weight: 600; color: var(--fg);
+    letter-spacing: .02em;
+    display: flex; align-items: baseline; gap: 10px;
+  }
+  .panel h2 small { color: var(--fg-mute); font-weight: 400; letter-spacing: 0; font-size: 11px; }
+
+  /* ── 筛选 ─────────────────────────────────────────── */
+  .filters {
+    display: flex; flex-wrap: wrap; gap: 16px; align-items: flex-end;
+  }
+  .f { display: flex; flex-direction: column; gap: 5px; }
+  .f > label { color: var(--fg-mute); font-size: 11px; letter-spacing: .04em; }
+  select, input[type=date], input[type=text] {
+    background: var(--panel-2); color: var(--fg);
+    border: 1px solid var(--border); border-radius: 6px;
+    padding: 5px 9px; font: inherit; font-size: 12px; min-width: 110px;
+  }
+  select:hover, input[type=date]:hover { border-color: #cfd4da; }
+  select:focus, input:focus { outline: 2px solid rgba(76,141,255,.18); border-color: var(--in); }
+  .btn {
+    background: var(--panel-2); color: var(--fg-dim);
+    border: 1px solid var(--border); border-radius: 6px;
+    padding: 5px 13px; font: inherit; font-size: 12px; cursor: pointer;
+  }
+  .btn:hover { background: #f2f4f7; color: var(--fg); border-color: #cfd4da; }
+  .btn.on { background: #eef4ff; border-color: #b9d3ff; color: #1a56c4; font-weight: 500; }
+
+  /* ── 表格 ─────────────────────────────────────────── */
+  table { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }
+  th {
+    text-align: right; color: var(--fg-mute); font-weight: 500; font-size: 11px;
+    padding: 6px 9px; border-bottom: 1px solid var(--border);
+    letter-spacing: .04em; white-space: nowrap;
+  }
+  th:first-child, td:first-child { text-align: left; }
+  td { padding: 6px 9px; border-bottom: 1px solid var(--border-2); font-size: 12px; }
+  tbody tr:hover { background: #fafbfc; }
+  .num { text-align: right; }
+  .dim { color: var(--fg-mute); }
+  .mono { font-family: ui-monospace, "Cascadia Code", Consolas, monospace; font-size: 11px; }
+  .tag {
+    display: inline-block; padding: 1px 6px; border-radius: 4px;
+    font-size: 10px; letter-spacing: .03em; vertical-align: 1px;
+  }
+  .tag.cur   { background: #eef4ff; color: #1a56c4; border: 1px solid #cfe0ff; }
+  .tag.syn   { background: #f2f4f7; color: #6b7280; border: 1px solid #e4e6ea; }
+  .dot { display: inline-block; width: 8px; height: 8px; border-radius: 2px; margin-right: 6px; vertical-align: 0; }
+
+  /* ── 图表 ─────────────────────────────────────────── */
+  .chart { width: 100%; display: block; }
+  .legend { display: flex; gap: 16px; flex-wrap: wrap; margin: 2px 0 12px; font-size: 11px; color: var(--fg-dim); }
+  .legend span { display: flex; align-items: center; }
+
+  .empty { color: var(--fg-mute); padding: 26px 0; text-align: center; }
+  .warn {
+    background: #fffbeb; border: 1px solid #fde68a; color: #92400e;
+    border-radius: 8px; padding: 9px 13px; font-size: 12px; margin-bottom: 14px;
+  }
+  .note { color: var(--fg-mute); font-size: 11px; margin-top: 10px; line-height: 1.7; }
+  /* 底部说明里的导出信息（原顶部标题栏文字，移到页脚） */
+  .note .sub { color: var(--fg-mute); font-size: 11px; margin-bottom: 4px; }
+  .note .sub b { color: var(--fg-dim); font-weight: 600; }
+  code {
+    background: #f2f4f7; padding: 1px 5px; border-radius: 4px;
+    font-size: 11px; color: var(--fg-dim);
+  }
+
+  /* ── 标题栏（时间 / 下次刷新 / 手动刷新） ─────────── */
+  .topbar {
+    display: flex; align-items: center;
+    margin-bottom: 14px;
+  }
+
+  .clock {
+    display: flex; align-items: center; justify-content: center;
+    gap: 36px; flex-wrap: wrap;
+    background: var(--panel); border: 1px solid var(--border);
+    border-radius: 10px; padding: 12px 20px;
+    box-shadow: 0 1px 2px rgba(16,24,40,.04);
+    flex: 1 1 auto;            /* 独占整行 */
+  }
+  .clock .item {
+    display: flex; flex-direction: column; align-items: center; gap: 2px;
+    text-align: center;
+  }
+  .clock .item .k {
+    color: var(--fg-mute); font-size: 12px;
+    letter-spacing: .04em; white-space: nowrap;
+  }
+  .clock .item .v {
+    font-size: 21px; font-weight: 600; color: var(--fg);
+    line-height: 1.25;
+    font-variant-numeric: tabular-nums; white-space: nowrap;
+  }
+  .clock .item .v.now { color: #1a56c4; }
+  .clock .sep { width: 1px; align-self: stretch; background: var(--border); }
+  .clock select#clkInterval {
+    font: inherit; font-size: 15px; min-width: 110px;
+    padding: 4px 8px; border-radius: 6px;
+  }
+  /* 数据来源标记：服务模式（能自动导出）/ 静态模式（只能重载 data.js） */
+  .clock #clkMode {
+    align-self: center; white-space: nowrap;
+    font-size: 12px; padding: 3px 9px;
+  }
+  .clock #clkMode.live { background: #f0fbf3; color: #1a7f37; border: 1px solid #b7e0c1; }
+  .clock #clkMode.static { background: #fff7ed; color: #b45309; border: 1px solid #fed7aa; }
+  .clock #clkMode:empty { display: none; }
+
+  /* 下次刷新倒计时进度条 */
+  .clock .prog {
+    width: 64px; height: 3px; border-radius: 2px;
+    background: #eef0f3; overflow: hidden; margin-top: 3px;
+  }
+  .clock .prog i {
+    display: block; height: 100%; width: 0;
+    background: linear-gradient(90deg, #4c8dff, #8b5cf6);
+    transition: width .95s linear;
+  }
+
+  .btn.refresh { display: inline-flex; align-items: center; gap: 6px; padding: 6px 14px; }
+  .btn.refresh .ico { font-size: 13px; line-height: 1; display: inline-block; }
+  .btn.refresh.busy { opacity: .6; pointer-events: none; }
+  .btn.refresh.busy .ico { animation: spin .7s linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .btn.refresh .cd { color: var(--fg-mute); font-size: 11px; font-variant-numeric: tabular-nums; }
+
+  @media (max-width: 720px) {
+    /* 窄屏：允许换行，刷新按钮仍贴右 */
+    .clock { gap: 10px 14px; }
+    .clock .sep { display: none; }
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="topbar">
+    <div class="clock">
+      <div class="item">
+        <span class="k">现在时间</span>
+        <span class="v now" id="clkNow">--:--:--</span>
+      </div>
+      <div class="sep"></div>
+      <div class="item">
+        <span class="k">下次刷新倒计时</span>
+        <span class="v" id="clkNext">--:--</span>
+        <span class="prog"><i id="clkProg"></i></span>
+      </div>
+      <div class="item">
+        <span class="k">刷新间隔</span>
+        <select id="clkInterval" title="自动刷新间隔（改完立即生效，记在本机）">
+          <option value="0">手动</option>
+          <option value="30">30 秒</option>
+          <option value="60">1 分钟</option>
+          <option value="300">5 分钟</option>
+          <option value="900">15 分钟</option>
+          <option value="1800">30 分钟</option>
+          <option value="3600">1 小时</option>
+        </select>
+      </div>
+      <div class="sep"></div>
+      <div class="item" id="clkState">
+        <span class="k">数据时间</span>
+        <span class="v" id="clkData">—</span>
+      </div>
+      <span class="tag" id="clkMode" title=""></span>
+      <button class="btn refresh" id="btnRefresh" title="立即更新数据">
+        <span class="ico">⟳</span><span>刷新</span>
+      </button>
+    </div>
+  </div>
+
+  <div id="warn"></div>
+
+  <!-- 今日 / 历史总计：两个统计条并列 -->
+  <div class="pair">
+    <div class="today" id="today"></div>
+    <div class="today hist" id="histTotal"></div>
+  </div>
+
+  <!-- 今日图表：饼图 + 柱形图并列 -->
+  <div class="duo">
+    <div class="panel">
+      <h2>今日 Token 构成 <small id="pieHint"></small></h2>
+      <canvas id="cTodayPie" class="chart" height="220"></canvas>
+      <div class="bd" id="bdPie"></div>
+    </div>
+    <div class="panel">
+      <h2>今日分时用量 <small id="barHint"></small></h2>
+      <canvas id="cTodayBar" class="chart" height="220"></canvas>
+      <div class="bd" id="bdBar"></div>
+    </div>
+  </div>
+
+  <!-- 筛选：位于历史总计下方 -->
+  <div class="panel">
+    <h2>筛选</h2>
+    <div class="filters">
+      <div class="f">
+        <label>应用</label>
+        <select id="fApp"><option value="">全部</option></select>
+      </div>
+      <div class="f">
+        <label>供应商</label>
+        <select id="fProv"><option value="">全部</option></select>
+      </div>
+      <div class="f">
+        <label>模型</label>
+        <select id="fModel"><option value="">全部</option></select>
+      </div>
+      <div class="f">
+        <label>开始日期</label>
+        <input type="date" id="fFrom">
+      </div>
+      <div class="f">
+        <label>结束日期</label>
+        <input type="date" id="fTo">
+      </div>
+      <div class="f">
+        <label>数据来源</label>
+        <div style="display:flex;gap:6px">
+          <button class="btn" id="fSrcProxy">仅代理</button>
+          <button class="btn" id="fSrcAll">全部</button>
+        </div>
+      </div>
+      <div class="f">
+        <label>令牌类型</label>
+        <select id="fToken">
+          <option value="total">合计</option>
+          <option value="i">输入</option>
+          <option value="o">输出</option>
+          <option value="r">缓存读</option>
+        </select>
+      </div>
+      <div class="f">
+        <label>&nbsp;</label>
+        <button class="btn" id="fReset">重置</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 用量趋势 + 按供应商（扇形图）：并列 -->
+  <div class="pair">
+    <div class="panel">
+      <h2>用量趋势 <small id="granHint"></small></h2>
+      <div class="legend">
+        <span><i class="dot" style="background:var(--in)"></i>输入</span>
+        <span><i class="dot" style="background:var(--out)"></i>输出</span>
+        <span><i class="dot" style="background:var(--cache)"></i>缓存读</span>
+      </div>
+      <canvas id="cTrend" class="chart" height="230"></canvas>
+    </div>
+
+    <div class="panel">
+      <h2>按供应商 <small id="provHint"></small></h2>
+      <canvas id="cProvPie" class="chart" height="200"></canvas>
+      <div class="plegend" id="lgProv"></div>
+    </div>
+  </div>
+
+  <!-- 按模型（饼图） + 请求明细：3:7 -->
+  <div class="pair pair-37">
+    <div class="panel">
+      <h2>按模型 <small id="modelHint"></small></h2>
+      <canvas id="cModelPie" class="chart" height="200"></canvas>
+      <div class="plegend" id="lgModel"></div>
+    </div>
+
+    <div class="panel">
+      <h2>请求明细 <small id="detailHint"></small></h2>
+      <div style="max-height:460px;overflow:auto">
+      <table id="tDetail">
+        <thead>
+          <tr>
+            <th>时间</th><th>应用</th><th>供应商</th><th>模型</th>
+            <th class="num">输入</th><th class="num">输出</th>
+            <th class="num">缓存读</th><th class="num">合计</th><th class="num">延迟</th><th class="num">状态</th>
+          </tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+    </div>
+    <div class="note" id="detailNote"></div>
+    </div>
+  </div>
+
+  <div class="note">
+    <div class="sub" id="meta">加载中…</div>
+    数据源 <code id="dbPath"></code><br>
+    <b>自动更新</b>：<code>node serve.mjs --open</code> 启动本地服务后从服务地址访问，
+    倒计时到点会自动运行 <code>export.mjs</code> 重写 data.js（刷新间隔见顶部方框）；
+    直接用 file:// 打开时只能重新加载 data.js，需要新数据请手动跑
+    <code>node export.mjs</code> 再点刷新。
+  </div>
+</div>
+
+<script src="data.js"></script>
+<script>
+(() => {
+'use strict';
+
+// ════════════════════════════════════════════════════════════
+//  数据
+// ════════════════════════════════════════════════════════════
+let DATA = window.CC_USAGE;
+if (!DATA) {
+  const w = document.getElementById('warn');
+  if (w) {
+    w.innerHTML = '<div class="warn">未找到 data.js —— '
+      + '请先在该目录运行 <code>node export.mjs</code>（或 <code>node serve.mjs</code> 启动本地服务）</div>';
+  }
+  return;
+}
+
+// 可变：支持热重载 data.js 后替换
+let REC = DATA.records;
+let provById = new Map(DATA.providers.map(p => [p.app + '\u0000' + p.id, p]));
+
+/** 用新加载的 window.CC_USAGE 替换当前数据源 */
+function adoptData() {
+  if (!window.CC_USAGE) return false;
+  DATA = window.CC_USAGE;
+  REC = DATA.records;
+  provById = new Map(DATA.providers.map(p => [p.app + '\u0000' + p.id, p]));
+  return true;
+}
+
+// ── 图表配色（与 CSS 变量保持一致） ─────────────────────────
+const THEME = {
+  seg:    { i: '#4c8dff', o: '#34a853', r: '#8b5cf6' },
+  grid:   '#eef0f3',
+  axis:   '#dfe3e8',
+  label:  '#8c959f',
+  text:   '#1f2328',
+  sub:    '#57606a',
+  border: '#e4e6ea',
+};
+
+// ── 工具 ────────────────────────────────────────────────────
+const fmt = n => Number(n || 0).toLocaleString('en-US');
+function short(n) {
+  n = Number(n || 0);
+  if (Math.abs(n) >= 1e9) return (n / 1e9).toFixed(2) + 'B';
+  if (Math.abs(n) >= 1e6) return (n / 1e6).toFixed(2) + 'M';
+  if (Math.abs(n) >= 1e3) return (n / 1e3).toFixed(1) + 'K';
+  return String(n);
+}
+const pad2 = v => String(v).padStart(2, '0');
+/** unix 秒 -> YYYY-MM-DD（本地时区） */
+function ymd(ts) {
+  const d = new Date(ts * 1000);
+  return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
+}
+/** unix 秒 -> YYYY-MM-DD HH:00（本地时区） */
+function ymdh(ts) {
+  const d = new Date(ts * 1000);
+  return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())} ${pad2(d.getHours())}:00`;
+}
+function ymdhm(ts) {
+  const d = new Date(ts * 1000);
+  return `${ymd(ts)} ${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
+}
+const tok = r => r.i + r.o + r.r;
+const provName = r => {
+  const p = provById.get(r.a + '\u0000' + r.p);
+  return p ? p.name : r.p;
+};
+const isSynthetic = r => r.ds === 'codex_session';
+const esc = s => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+
+// ════════════════════════════════════════════════════════════
+//  状态
+// ════════════════════════════════════════════════════════════
+const S = {
+  app: '', prov: '', model: '',
+  from: DATA.dateRange.min || '',
+  to:   DATA.dateRange.max || '',
+  synthetic: true,          // 是否包含会话导入
+  token: 'total',           // 趋势图看的令牌类型
+  userRange: false,         // 用户是否手动改过日期区间
+};
+
+// ════════════════════════════════════════════════════════════
+//  筛选
+// ════════════════════════════════════════════════════════════
+function filtered() {
+  return REC.filter(r => matchBase(r) && inRange(r));
+}
+
+/** 非日期类筛选（供「今日」行复用，使其不受日期区间影响） */
+function matchBase(r) {
+  if (!S.synthetic && isSynthetic(r)) return false;
+  if (S.app && r.a !== S.app) return false;
+  if (S.model && r.m !== S.model) return false;
+  // provider_id 全局唯一（已验证无跨 app 重名）
+  if (S.prov && r.p !== S.prov) return false;
+  return true;
+}
+
+function inRange(r) {
+  const d = ymd(r.t);
+  if (S.from && d < S.from) return false;
+  if (S.to   && d > S.to)   return false;
+  return true;
+}
+
+const localDate = d =>
+  `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
+
+/** 「今日」行的目标日期：优先真正的今天，否则回退到最新有记录的一天 */
+function todayTarget() {
+  const todayStr = localDate(new Date());
+  const days = [...new Set(REC.map(r => ymd(r.t)))].sort();
+  return days.includes(todayStr) ? todayStr : (days[days.length - 1] || '');
+}
+/** 今日视图下的记录（不受日期区间筛选影响，但与其余筛选联动） */
+function todayRows() {
+  const target = todayTarget();
+  return target ? REC.filter(r => matchBase(r) && ymd(r.t) === target) : [];
+}
+
+// ════════════════════════════════════════════════════════════
+//  今日一行
+// ════════════════════════════════════════════════════════════
+function renderToday() {
+  const el = document.getElementById('today');
+
+  // 数据是导出时的快照：优先取真正的今天，否则回退到最新有记录的一天
+  const todayStr = localDate(new Date());
+  const days = [...new Set(REC.map(r => ymd(r.t)))].sort();
+  const latest = days[days.length - 1];
+  const isToday = days.includes(todayStr);
+  const target = isToday ? todayStr : latest;
+
+  if (!target) { el.style.display = 'none'; return; }
+  el.style.display = '';
+
+  const rows = todayRows();
+
+  const sum = k => rows.reduce((s, r) => s + r[k], 0);
+  const total = sum('i') + sum('o') + sum('r');
+
+  const okLat = rows.filter(r => r.s < 400 && r.l > 0);
+  const errs = rows.filter(r => r.s >= 400).length;
+
+  const st = (k, v, unit = '', hl = false) =>
+    `<div class="st"><span class="k">${k}</span>
+     <span class="v${hl ? ' hl' : ''}">${v}${unit ? `<span class="u">${unit}</span>` : ''}</span></div>`;
+
+  const dot = isToday ? 'live' : 'stale';
+  const label = isToday ? '今日' : '最新';
+  const sub = isToday
+    ? target
+    : `${target}　(数据导出于 ${DATA.generatedAtLocal.split(' ')[0]})`;
+
+  el.innerHTML =
+    `<div class="hd">
+       <span class="t"><i class="${dot}"></i>${label}</span>
+       <span class="d">${esc(sub)}</span>
+     </div>`
+    + `<div class="stats">`
+    + st('合计 Token', short(total), '', true)
+    + st('请求数', fmt(rows.length))
+    + st('输入', short(sum('i')))
+    + st('输出', short(sum('o')))
+    + st('缓存读', short(sum('r')))
+    + (errs ? st('失败', `<span style="color:var(--err)">${errs}</span>`) : '')
+    + `</div>`;
+}
+
+// ════════════════════════════════════════════════════════════
+//  历史总计（沿用「今日」行盒子样式）
+// ════════════════════════════════════════════════════════════
+function renderHistTotal(rows) {
+  const el = document.getElementById('histTotal');
+  if (!el) return;
+
+  const sum = k => rows.reduce((s, r) => s + r[k], 0);
+  const total = sum('i') + sum('o') + sum('r');
+  const errs = rows.filter(r => r.s >= 400).length;
+
+  const st = (k, v, unit = '', hl = false) =>
+    `<div class="st"><span class="k">${k}</span>
+     <span class="v${hl ? ' hl' : ''}">${v}${unit ? `<span class="u">${unit}</span>` : ''}</span></div>`;
+
+  const days = new Set(rows.map(r => ymd(r.t))).size;
+  const sub = days
+    ? `${S.from || DATA.dateRange.min} ~ ${S.to || DATA.dateRange.max}　${days} 天有数据`
+    : '当前筛选无数据';
+
+  el.innerHTML =
+    `<div class="hd">
+       <span class="t"><i class="neutral"></i>历史总计</span>
+       <span class="d">${esc(sub)}</span>
+     </div>`
+    + `<div class="stats">`
+    + st('合计 Token', short(total), '', true)
+    + st('请求数', fmt(rows.length))
+    + st('输入', short(sum('i')))
+    + st('输出', short(sum('o')))
+    + st('缓存读', short(sum('r')))
+    + (errs ? st('失败', `<span style="color:var(--err)">${errs}</span>`) : '')
+    + `</div>`;
+}
+
+// ════════════════════════════════════════════════════════════
+//  今日饼图（输入/输出/缓存读构成）
+// ════════════════════════════════════════════════════════════
+
+/** 渲染「供应商 / 模型」署名条，供今日两个图表复用 */
+function renderBreakdown(elId, rows) {
+  const el = document.getElementById(elId);
+  if (!el) return;
+
+  if (!rows.length) { el.innerHTML = ''; return; }
+
+  const grand = rows.reduce((s, r) => s + tok(r), 0) || 1;
+
+  // 供应商：以「应用 + 供应商 id」聚合，名称走 provName
+  const pMap = new Map();
+  for (const r of rows) {
+    const k = r.a + '\u0000' + r.p;
+    if (!pMap.has(k)) pMap.set(k, { i: 0, o: 0, r: 0, reqs: 0, app: r.a, pid: r.p });
+    const m = pMap.get(k);
+    m.i += r.i; m.o += r.o; m.r += r.r; m.reqs++;
+  }
+  const pList = [...pMap.values()]
+    .map(v => ({ ...v, total: v.i + v.o + v.r }))
+    .sort((a, b) => b.total - a.total);
+
+  // 模型：以「模型 + 请求模型别名」聚合，与历史表格口径一致
+  const mMap = new Map();
+  for (const r of rows) {
+    const k = r.m + '\u0000' + r.rm;
+    if (!mMap.has(k)) mMap.set(k, { i: 0, o: 0, r: 0, reqs: 0, m: r.m, rm: r.rm });
+    const e = mMap.get(k);
+    e.i += r.i; e.o += r.o; e.r += r.r; e.reqs++;
+  }
+  const mList = [...mMap.values()]
+    .map(v => ({ ...v, total: v.i + v.o + v.r }))
+    .sort((a, b) => b.total - a.total);
+
+  const MAX_CHIPS = 4;
+  const chip = (name, obj, extraClass = '') => {
+    const pct = (obj.total / grand * 100).toFixed(1) + '%';
+    return `<span class="chip${extraClass}">
+      <span class="nm" title="${esc(name)}">${esc(name)}</span>
+      <span class="n">${short(obj.total)}</span>
+      <span class="pct">${pct}</span>
+    </span>`;
+  };
+
+  const provChips = pList.slice(0, MAX_CHIPS).map(v => {
+    const p = provById.get(v.app + '\u0000' + v.pid);
+    const nm = p ? p.name : v.pid;
+    const cur = p && p.current ? ' cur' : '';
+    return chip(`[${v.app}] ${nm}`, v, cur);
+  }).join('');
+
+  const modelChips = mList.slice(0, MAX_CHIPS).map(v => {
+    const alias = v.rm && v.rm !== v.m ? ` ← ${v.rm}` : '';
+    return chip(v.m + alias, v);
+  }).join('');
+
+  const more = (n, unit) => n > MAX_CHIPS
+    ? `<span class="chip"><span class="pct">另有 ${n - MAX_CHIPS} 个${unit}</span></span>` : '';
+
+  el.innerHTML =
+    `<div class="row"><span class="lb">供应商</span>${provChips}${more(pList.length, '供应商')}</div>` +
+    `<div class="row"><span class="lb">模型</span>${modelChips}${more(mList.length, '模型')}</div>`;
+}
+
+function renderTodayPie(rows) {
+  const cv = document.getElementById('cTodayPie');
+  if (!cv) return;
+  const ctx = cv.getContext('2d');
+
+  const segs = [
+    { key: 'i', label: '输入',   color: THEME.seg.i, v: rows.reduce((s, r) => s + r.i, 0) },
+    { key: 'o', label: '输出',   color: THEME.seg.o, v: rows.reduce((s, r) => s + r.o, 0) },
+    { key: 'r', label: '缓存读', color: THEME.seg.r, v: rows.reduce((s, r) => s + r.r, 0) },
+  ].filter(s => s.v > 0);
+  const total = segs.reduce((s, x) => s + x.v, 0);
+
+  const dpr = Math.min(window.devicePixelRatio || 1, 2);
+  const cssW = cv.clientWidth || 460;
+  const cssH = 220;
+  cv.width = Math.round(cssW * dpr);
+  cv.height = Math.round(cssH * dpr);
+  cv.style.height = cssH + 'px';
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, cssW, cssH);
+
+  const hint = document.getElementById('pieHint');
+
+  if (!total) {
+    ctx.fillStyle = THEME.label; ctx.font = '13px system-ui, sans-serif';
+    ctx.textAlign = 'center'; ctx.fillText('无数据', cssW / 2, cssH / 2);
+    if (hint) hint.textContent = '';
+    renderBreakdown('bdPie', []);
+    return;
+  }
+  if (hint) hint.textContent = `合计 ${short(total)}`;
+  renderBreakdown('bdPie', rows);
+
+  // 圆环
+  const cx = cssW * 0.34;
+  const cy = cssH / 2;
+  const R = Math.min(cssH * 0.38, cssW * 0.22);
+  const r = R * 0.6;
+  let a0 = -Math.PI / 2;
+  const gap = segs.length > 1 ? 0.016 : 0;
+
+  for (const s of segs) {
+    const sweep = (s.v / total) * Math.PI * 2;
+    // 缝隙不得超过扇段本身，否则极小的扇段起止角反转、整圈被其颜色覆盖
+    const g = Math.min(gap, sweep * 0.4);
+    ctx.beginPath();
+    ctx.arc(cx, cy, R, a0 + g / 2, a0 + sweep - g / 2);
+    ctx.arc(cx, cy, r, a0 + sweep - g / 2, a0 + g / 2, true);
+    ctx.closePath();
+    ctx.fillStyle = s.color;
+    ctx.fill();
+    a0 += sweep;
+  }
+
+  // 圆心文字
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillStyle = THEME.label;
+  ctx.font = '11px system-ui, "Microsoft YaHei", sans-serif';
+  ctx.fillText('合计', cx, cy - 11);
+  ctx.fillStyle = THEME.text;
+  ctx.font = '600 16px ui-monospace, monospace';
+  ctx.fillText(short(total), cx, cy + 8);
+
+  // 右侧图例
+  const lx = cx + R + Math.max(18, cssW * 0.05);
+  const rowH = 30;
+  let ly = cy - (segs.length * rowH) / 2 + rowH / 2;
+  ctx.textBaseline = 'middle';
+  for (const s of segs) {
+    ctx.fillStyle = s.color;
+    ctx.fillRect(lx, ly - 5, 10, 10);
+    ctx.textAlign = 'left';
+    ctx.fillStyle = THEME.sub;
+    ctx.font = '12px system-ui, "Microsoft YaHei", sans-serif';
+    ctx.fillText(s.label, lx + 17, ly);
+    ctx.fillStyle = THEME.text;
+    ctx.font = '600 12px ui-monospace, monospace';
+    ctx.fillText(short(s.v), lx + 17, ly + 14);
+    ctx.fillStyle = THEME.label;
+    ctx.font = '10px ui-monospace, monospace';
+    ctx.fillText((s.v / total * 100).toFixed(1) + '%', lx + 17 + 62, ly + 14);
+    ly += rowH;
+  }
+}
+
+// ════════════════════════════════════════════════════════════
+//  今日柱形图（按小时堆叠，单小时降级为构成柱）
+// ════════════════════════════════════════════════════════════
+function renderTodayBar(rows) {
+  const cv = document.getElementById('cTodayBar');
+  if (!cv) return;
+  const ctx = cv.getContext('2d');
+
+  const buckets = new Map();
+  for (const r of rows) {
+    const k = ymdh(r.t);
+    if (!buckets.has(k)) {
+      buckets.set(k, { i: 0, o: 0, r: 0, reqs: 0, models: new Map(), prods: new Map() });
+    }
+    const b = buckets.get(k);
+    b.i += r.i; b.o += r.o; b.r += r.r; b.reqs++;
+    b.models.set(r.m, (b.models.get(r.m) || 0) + tok(r));
+    const pn = provName(r);
+    b.prods.set(pn, (b.prods.get(pn) || 0) + tok(r));
+  }
+  const keys = [...buckets.keys()].sort();
+
+  // 多时段且每格足够宽时，在 X 轴下方补注「主要模型 / 供应商」
+  // （仅 1 个时段时下方署名条已覆盖，无需重复）
+  const slotW = (cv.clientWidth || 640) - 74;
+  const showNames = keys.length >= 2 && slotW / keys.length >= 74;
+
+  const dpr = Math.min(window.devicePixelRatio || 1, 2);
+  const cssW = cv.clientWidth || 640;
+  const cssH = showNames ? 252 : 220;
+  cv.width = Math.round(cssW * dpr);
+  cv.height = Math.round(cssH * dpr);
+  cv.style.height = cssH + 'px';
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, cssW, cssH);
+
+  const hint = document.getElementById('barHint');
+
+  if (!keys.length) {
+    ctx.fillStyle = THEME.label; ctx.font = '13px system-ui, sans-serif';
+    ctx.textAlign = 'center'; ctx.fillText('无数据', cssW / 2, cssH / 2);
+    if (hint) hint.textContent = '';
+    renderBreakdown('bdBar', []);
+    return;
+  }
+  if (hint) hint.textContent = `${keys.length} 个时段 · ${fmt(rows.length)} 次请求`;
+  renderBreakdown('bdBar', rows);
+
+  const COL = THEME.seg;
+  const PL = 62, PR = 12, PT = 12, PB = showNames ? 56 : 30;
+  const plotW = cssW - PL - PR;
+  const plotH = cssH - PT - PB;
+
+  const totals = keys.map(k => {
+    const b = buckets.get(k);
+    return b.i + b.o + b.r;
+  });
+  const maxTotal = Math.max(...totals, 1);
+
+  // 网格 + Y 轴
+  const NICE = 4;
+  ctx.font = '10px ui-monospace, monospace';
+  ctx.textAlign = 'right';
+  ctx.textBaseline = 'middle';
+  for (let i = 0; i <= NICE; i++) {
+    const y = PT + plotH - (plotH * i / NICE);
+    ctx.strokeStyle = i === 0 ? THEME.axis : THEME.grid;
+    ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.moveTo(PL, y + .5); ctx.lineTo(PL + plotW, y + .5); ctx.stroke();
+    ctx.fillStyle = THEME.label;
+    ctx.fillText(short(maxTotal * i / NICE), PL - 8, y);
+  }
+
+  // 单个时段时收窄柱宽，避免占满
+  const slot = plotW / keys.length;
+  const bw = Math.max(10, Math.min(96, slot * (keys.length === 1 ? 0.3 : 0.66)));
+
+  keys.forEach((k, idx) => {
+    const b = buckets.get(k);
+    const cx = PL + slot * (idx + 0.5);
+    const x = cx - bw / 2;
+    let acc = 0;
+    for (const seg of ['i', 'o', 'r']) {
+      if (!b[seg]) continue;
+      const h = (b[seg] / maxTotal) * plotH;
+      const y = PT + plotH - acc - h;
+      ctx.fillStyle = COL[seg];
+      ctx.fillRect(x, y, bw, Math.max(h, 0.8));
+      acc += h;
+    }
+  });
+
+  // X 轴标签
+  ctx.fillStyle = THEME.label;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'top';
+  const every = Math.ceil(keys.length / 10);
+  keys.forEach((k, idx) => {
+    if (idx % every) return;
+    const cx = PL + slot * (idx + 0.5);
+    ctx.fillText(k.slice(5), cx, PT + plotH + 8);
+  });
+
+  // 每个柱子下方补注主要模型与供应商
+  if (showNames) {
+    const top1 = map => [...map.entries()].sort((a, b) => b[1] - a[1])[0];
+    const clip = (s, px, font) => {
+      ctx.font = font;
+      if (ctx.measureText(s).width <= px) return s;
+      let t = s;
+      while (t.length > 1 && ctx.measureText(t + '…').width > px) t = t.slice(0, -1);
+      return t + '…';
+    };
+    const maxW = Math.min(slot * 0.94, 130);
+
+    ctx.textBaseline = 'top';
+    keys.forEach((k, idx) => {
+      const b = buckets.get(k);
+      const cx = PL + slot * (idx + 0.5);
+      const mTop = top1(b.models);
+      const pTop = top1(b.prods);
+      let y = PT + plotH + 24;
+
+      if (mTop) {
+        ctx.fillStyle = THEME.sub;
+        const s = clip(mTop[0], maxW, '11px system-ui, "Microsoft YaHei", sans-serif');
+        ctx.font = '11px system-ui, "Microsoft YaHei", sans-serif';
+        ctx.fillText(s, cx, y);
+        y += 14;
+      }
+      if (pTop) {
+        ctx.fillStyle = THEME.label;
+        const s = clip(pTop[0], maxW, '10px system-ui, "Microsoft YaHei", sans-serif');
+        ctx.font = '10px system-ui, "Microsoft YaHei", sans-serif';
+        ctx.fillText(s, cx, y);
+      }
+    });
+  }
+}
+
+// ════════════════════════════════════════════════════════════
+//  趋势图（堆叠柱）
+// ════════════════════════════════════════════════════════════
+function renderTrend(rows) {
+  const cv = document.getElementById('cTrend');
+  const ctx = cv.getContext('2d');
+
+  // 依据跨度选择粒度
+  const days = new Set(rows.map(r => ymd(r.t))).size;
+  const useHour = days <= 2;
+  const keyOf = useHour ? ymdh : ymd;
+  document.getElementById('granHint').textContent =
+    `按${useHour ? '小时' : '天'}${S.token !== 'total' ? '　仅' + document.getElementById('fToken').selectedOptions[0].text : ''}`;
+
+  const buckets = new Map();
+  for (const r of rows) {
+    const k = keyOf(r.t);
+    if (!buckets.has(k)) buckets.set(k, { i: 0, o: 0, r: 0, reqs: 0 });
+    const b = buckets.get(k);
+    b.i += r.i; b.o += r.o; b.r += r.r; b.reqs++;
+  }
+  const keys = [...buckets.keys()].sort();
+
+  const dpr = Math.min(window.devicePixelRatio || 1, 2);
+  const cssW = cv.clientWidth || 900;
+  const cssH = 230;
+  cv.width = Math.round(cssW * dpr);
+  cv.height = Math.round(cssH * dpr);
+  cv.style.height = cssH + 'px';
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, cssW, cssH);
+
+  if (!keys.length) {
+    ctx.fillStyle = THEME.label;
+    ctx.font = '13px system-ui, sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText('无数据', cssW / 2, cssH / 2);
+    return;
+  }
+
+  const PL = 62, PR = 14, PT = 12, PB = 30;
+  const plotW = cssW - PL - PR;
+  const plotH = cssH - PT - PB;
+
+  // 只看单一令牌类型时，其他置 0
+  const pick = b => {
+    if (S.token === 'i') return { i: b.i, o: 0, r: 0 };
+    if (S.token === 'o') return { i: 0, o: b.o, r: 0 };
+    if (S.token === 'r') return { i: 0, o: 0, r: b.r };
+    return b;
+  };
+  const totals = keys.map(k => { const b = pick(buckets.get(k)); return b.i + b.o + b.r; });
+  const maxTotal = Math.max(...totals, 1);
+
+  // 网格 + Y 轴
+  const NICE = 4;
+  ctx.font = '10px ui-monospace, monospace';
+  ctx.textAlign = 'right';
+  ctx.textBaseline = 'middle';
+  for (let i = 0; i <= NICE; i++) {
+    const y = PT + plotH - (plotH * i / NICE);
+    ctx.strokeStyle = i === 0 ? THEME.axis : THEME.grid;
+    ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.moveTo(PL, y + .5); ctx.lineTo(PL + plotW, y + .5); ctx.stroke();
+    ctx.fillStyle = THEME.label;
+    ctx.fillText(short(maxTotal * i / NICE), PL - 8, y);
+  }
+
+  const bw = Math.max(2, Math.min(46, plotW / keys.length * 0.68));
+  const step = plotW / keys.length;
+  const COL = THEME.seg;
+
+  keys.forEach((k, idx) => {
+    const b = pick(buckets.get(k));
+    const cx = PL + step * (idx + 0.5);
+    const x = cx - bw / 2;
+    let acc = 0;
+    for (const seg of ['i', 'o', 'r']) {
+      if (!b[seg]) continue;
+      const h = (b[seg] / maxTotal) * plotH;
+      const y = PT + plotH - acc - h;
+      ctx.fillStyle = COL[seg];
+      ctx.fillRect(x, y, bw, Math.max(h, 0.8));
+      acc += h;
+    }
+  });
+
+  // X 轴标签（最多 12 个）
+  ctx.fillStyle = THEME.label;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'top';
+  const every = Math.ceil(keys.length / 12);
+  keys.forEach((k, idx) => {
+    if (idx % every) return;
+    const cx = PL + step * (idx + 0.5);
+    ctx.fillText(useHour ? k.slice(5) : k.slice(5), cx, PT + plotH + 8);
+  });
+}
+
+// ════════════════════════════════════════════════════════════
+//  按供应商（扇形图 + 下方注释）
+// ════════════════════════════════════════════════════════════
+function renderProvPie(rows) {
+  const cv = document.getElementById('cProvPie');
+  if (!cv) return;
+
+  const map = new Map();
+  for (const r of rows) {
+    const k = r.a + '\u0000' + r.p;
+    if (!map.has(k)) map.set(k, { i: 0, o: 0, r: 0, reqs: 0, errs: 0, errTok: 0,
+                                  lat: 0, latN: 0, app: r.a, pid: r.p, syn: false,
+                                  d0: r.t, d1: r.t });
+    const m = map.get(k);
+    m.i += r.i; m.o += r.o; m.r += r.r; m.reqs++;
+    if (r.s >= 400) { m.errs++; m.errTok += tok(r); }
+    if (r.l > 0 && r.s < 400) { m.lat += r.l; m.latN++; }
+    if (r.t < m.d0) m.d0 = r.t;
+    if (r.t > m.d1) m.d1 = r.t;
+    if (isSynthetic(r)) m.syn = true;
+  }
+  const list = [...map.values()]
+     .map(v => ({ ...v, total: v.i + v.o + v.r, v: v.i + v.o + v.r }))
+     .sort((a, b) => b.total - a.total);
+  const total = list.reduce((s, x) => s + x.total, 0);
+
+  const hint = document.getElementById('provHint');
+  if (hint) hint.textContent = total ? `合计 ${short(total)}` : '';
+
+  drawDonut(cv, list, total);
+
+  const items = list.slice(0, PIE_MAX).map((v, idx) => {
+    const p = provById.get(v.app + '\u0000' + v.pid);
+    const nm = p ? p.name : v.pid;
+    const tags =
+      (p && p.current ? '<span class="tag cur">当前</span>' : '')
+      + (v.syn && nm !== '会话导入' ? '<span class="tag syn">导入</span>' : '');
+    const meta = [
+      `请求 ${fmt(v.reqs)}`,
+      `缓存 ${(v.total ? v.r / v.total * 100 : 0).toFixed(1)}%`,
+      v.latN ? `平均 ${fmt(Math.round(v.lat / v.latN))} ms` : '',
+      v.errs ? `<span style="color:var(--err)">失败 ${fmt(v.errs)}</span>` : '',
+    ].filter(Boolean).join(' · ');
+    return {
+      color: PIE_COLORS[idx % PIE_COLORS.length],
+      name: nm, dim: `[${v.app}]`, tags,
+      title: `${nm} [${v.app}]\n${v.pid}\n${ymd(v.d0)} ~ ${ymd(v.d1)}`,
+      meta,
+      value: short(v.total),
+      pct: total ? (v.total / total * 100).toFixed(1) + '%' : '0.0%',
+    };
+  });
+
+  const rest = list.slice(PIE_MAX);
+  paintLegend('lgProv', items, rest.length
+    ? `另有 ${rest.length} 个供应商 · ${(rest.reduce((s, x) => s + x.total, 0) / (total || 1) * 100).toFixed(1)}%`
+    : '');
+}
+
+// ════════════════════════════════════════════════════════════
+//  模型占比（饼图）
+// ════════════════════════════════════════════════════════════
+
+/** 一组区分度足够的饼图配色 */
+const PIE_COLORS = [
+  '#4c8dff', '#8b5cf6', '#34a853', '#f59e0b',
+  '#ec4899', '#06b6d4', '#ef4444', '#84cc16',
+];
+
+/** 注释区最多列出的条目数（其余合并成一行「另有 N 个…」） */
+const PIE_MAX = 8;
+
+/**
+ * 画圆环：整幅画布居中，圆心写合计。
+ * 画布高度由 JS 写死（cssH），CSS 侧不可再拉伸，否则圆环会变成椭圆。
+ * @param {HTMLCanvasElement} cv
+ * @param {{v:number}[]} list 降序排列，最多只画前 PIE_MAX 段，其余并入「其他」
+ * @param {number} total
+ * @param {number} cssH 画布逻辑高度
+ */
+function drawDonut(cv, list, total, cssH = 200) {
+  const ctx = cv.getContext('2d');
+  const dpr = Math.min(window.devicePixelRatio || 1, 2);
+  const cssW = cv.clientWidth || 320;
+  cv.width  = Math.round(cssW * dpr);
+  cv.height = Math.round(cssH * dpr);
+  cv.style.height = cssH + 'px';   // 固定高度，避免被 flex 拉高变形
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, cssW, cssH);
+
+  if (!total) {
+    ctx.fillStyle = THEME.label;
+    ctx.font = '13px system-ui, sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText('无数据', cssW / 2, cssH / 2);
+    return;
+  }
+
+  // 超过 PIE_MAX 的尾巴合并成「其他」，与下方注释的「另有 N 个」口径一致
+  const head = list.slice(0, PIE_MAX);
+  const tail = list.slice(PIE_MAX);
+  const segs = head.map((s, idx) => ({ v: s.v, color: PIE_COLORS[idx % PIE_COLORS.length] }));
+  if (tail.length) {
+    segs.push({ v: tail.reduce((s, x) => s + x.v, 0), color: '#cbd5e1' });
+  }
+
+  const cx = cssW / 2;
+  const cy = cssH / 2;
+  const R  = Math.min(cssH * 0.44, cssW * 0.34);
+  const r  = R * 0.6;
+  const gap = segs.length > 1 ? 0.014 : 0;
+  let a0 = -Math.PI / 2;
+
+  for (const s of segs) {
+    const sweep = (s.v / total) * Math.PI * 2;
+    // 缝隙不得超过扇段本身：极小的占比（0.0%）若按整段缝隙扣除，
+    // 起止角会反转，canvas 会顺时针补满一圈，把整张圆环涂成这一段的颜色。
+    const g = Math.min(gap, sweep * 0.4);
+    ctx.beginPath();
+    ctx.arc(cx, cy, R, a0 + g / 2, a0 + sweep - g / 2);
+    ctx.arc(cx, cy, r, a0 + sweep - g / 2, a0 + g / 2, true);
+    ctx.closePath();
+    ctx.fillStyle = s.color;
+    ctx.fill();
+    a0 += sweep;
+  }
+
+  // 圆心：合计
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillStyle = THEME.label;
+  ctx.font = '11px system-ui, "Microsoft YaHei", sans-serif';
+  ctx.fillText('合计', cx, cy - 11);
+  ctx.fillStyle = THEME.text;
+  ctx.font = '600 16px ui-monospace, monospace';
+  ctx.fillText(short(total), cx, cy + 8);
+}
+
+/**
+ * 渲染扇形图下方的注释：色块 + 名称 + 数值/占比，窄面板自动换行。
+ * @param {string} elId
+ * @param {{color:string,name:string,dim?:string,tags?:string,title?:string,meta?:string,value:string,pct:string}[]} items
+ * @param {string} more 末尾（可选）的汇总说明
+ */
+function paintLegend(elId, items, more = '') {
+  const el = document.getElementById(elId);
+  if (!el) return;
+  if (!items.length && !more) { el.innerHTML = ''; return; }
+
+  el.innerHTML = items.map(it => `
+    <div class="row"${it.title ? ` title="${esc(it.title)}"` : ''}>
+      <span class="sw" style="background:${it.color}"></span>
+      <span class="nm">
+        <span class="tx">
+          <span class="name">${esc(it.name)}</span>
+          ${it.dim ? `<span class="dim">${esc(it.dim)}</span>` : ''}
+          ${it.tags || ''}
+        </span>
+        ${it.meta ? `<span class="meta">${it.meta}</span>` : ''}
+      </span>
+      <span class="val">${it.value}<span class="pct">${it.pct}</span></span>
+    </div>`).join('')
+    + (more ? `<div class="more">${esc(more)}</div>` : '');
+}
+
+function renderModelPie(rows) {
+  const cv = document.getElementById('cModelPie');
+  if (!cv) return;
+
+  // 按模型聚合（同一模型的请求别名合并）
+  const map = new Map();
+  for (const r of rows) {
+    const k = r.m;
+    if (!map.has(k)) map.set(k, { m: k, v: 0, reqs: 0, aliases: new Set() });
+    const e = map.get(k);
+    e.v += tok(r);
+    e.reqs++;
+    if (r.rm && r.rm !== r.m) e.aliases.add(r.rm);
+  }
+  const list = [...map.values()].sort((a, b) => b.v - a.v);
+  const total = list.reduce((s, x) => s + x.v, 0);
+
+  const hint = document.getElementById('modelHint');
+  if (hint) hint.textContent = total ? `合计 ${short(total)}` : '';
+
+  drawDonut(cv, list, total);
+
+  const items = list.slice(0, PIE_MAX).map((s, idx) => {
+    // 别名可能很长，放到第二行，避免把模型名挤成省略号
+    const alias = s.aliases.size ? ` ← ${[...s.aliases].join(' / ')}` : '';
+    return {
+      color: PIE_COLORS[idx % PIE_COLORS.length],
+      name: s.m,
+      title: `${s.m}${alias}`,
+      meta: `请求 ${fmt(s.reqs)}${alias}`,
+      value: short(s.v),
+      pct: total ? (s.v / total * 100).toFixed(1) + '%' : '0.0%',
+    };
+  });
+
+  const tail = list.slice(PIE_MAX);
+  paintLegend('lgModel', items, tail.length
+    ? `另有 ${tail.length} 个模型 · ${(tail.reduce((s, x) => s + x.v, 0) / (total || 1) * 100).toFixed(1)}%`
+    : '');
+}
+
+// ════════════════════════════════════════════════════════════
+//  请求明细
+// ════════════════════════════════════════════════════════════
+const DETAIL_MAX = 300;
+function renderDetail(rows) {
+  const sorted = [...rows].sort((a, b) => b.t - a.t);
+  const shown = sorted.slice(0, DETAIL_MAX);
+
+  document.getElementById('detailHint').textContent =
+    `共 ${fmt(rows.length)} 条` + (rows.length > DETAIL_MAX ? `，显示最近 ${DETAIL_MAX} 条` : '');
+
+  if (!shown.length) {
+    document.querySelector('#tDetail tbody').innerHTML =
+      '<tr><td colspan="10" class="empty">无数据</td></tr>';
+    document.getElementById('detailNote').textContent = '';
+    return;
+  }
+
+  document.querySelector('#tDetail tbody').innerHTML = shown.map(r => {
+    const bad = r.s >= 400;
+    return `<tr>
+      <td class="mono">${ymdhm(r.t)}</td>
+      <td class="dim">${esc(r.a)}</td>
+      <td>${esc(provName(r))}${isSynthetic(r) ? ' <span class="tag syn">导入</span>' : ''}</td>
+      <td class="mono">${esc(r.m)}</td>
+      <td class="num">${r.i ? fmt(r.i) : '<span class="dim">0</span>'}</td>
+      <td class="num">${r.o ? fmt(r.o) : '<span class="dim">0</span>'}</td>
+      <td class="num">${r.r ? fmt(r.r) : '<span class="dim">0</span>'}</td>
+      <td class="num"><b>${fmt(tok(r))}</b></td>
+      <td class="num dim">${r.l ? fmt(r.l) : '—'}</td>
+      <td class="num">${bad
+        ? `<span style="color:var(--err)">${r.s}</span>`
+        : `<span class="dim">${r.s}</span>`}</td>
+    </tr>`;
+  }).join('');
+
+  const errTok = rows.filter(r => r.s >= 400).reduce((s, r) => s + tok(r), 0);
+  document.getElementById('detailNote').textContent = errTok === 0
+    ? '注意：失败的请求未消耗 token，不影响用量统计。'
+    : `注意：失败请求共消耗 ${fmt(errTok)} token。`;
+}
+
+// ════════════════════════════════════════════════════════════
+//  总渲染
+// ════════════════════════════════════════════════════════════
+function render() {
+  const rows = filtered();
+  renderToday();
+  const tRows = todayRows();
+  renderTodayPie(tRows);
+  renderTodayBar(tRows);
+  renderHistTotal(rows);
+  renderTrend(rows);
+  renderProvPie(rows);
+  renderModelPie(rows);
+  renderDetail(rows);
+}
+
+// ════════════════════════════════════════════════════════════
+//  初始化控件
+// ════════════════════════════════════════════════════════════
+function initControls() {
+  const appSel   = document.getElementById('fApp');
+  const provSel  = document.getElementById('fProv');
+  const modelSel = document.getElementById('fModel');
+
+  for (const a of DATA.apps) {
+    appSel.insertAdjacentHTML('beforeend', `<option value="${esc(a)}">${esc(a)}</option>`);
+  }
+  for (const m of DATA.models) {
+    modelSel.insertAdjacentHTML('beforeend', `<option value="${esc(m)}">${esc(m)}</option>`);
+  }
+
+  function rebuildProv() {
+    const keep = provSel.value;
+    provSel.innerHTML = '<option value="">全部</option>';
+    const list = DATA.providers.filter(p => !S.app || p.app === S.app);
+    for (const p of list) {
+      const badge = p.current ? ' ●当前' : '';
+      provSel.insertAdjacentHTML('beforeend',
+        `<option value="${esc(p.id)}">[${esc(p.app)}] ${esc(p.name)}${badge}</option>`);
+    }
+    if ([...provSel.options].some(o => o.value === keep)) provSel.value = keep;
+    else if (S.prov) { S.prov = ''; }
+  }
+  rebuildProv();
+
+  document.getElementById('fFrom').value = S.from;
+  document.getElementById('fTo').value   = S.to;
+  document.getElementById('fFrom').min = DATA.dateRange.min;
+  document.getElementById('fFrom').max = DATA.dateRange.max;
+  document.getElementById('fTo').min   = DATA.dateRange.min;
+  document.getElementById('fTo').max   = DATA.dateRange.max;
+
+  appSel.addEventListener('change', () => { S.app = appSel.value; rebuildProv(); render(); });
+  provSel.addEventListener('change', () => { S.prov = provSel.value; render(); });
+  modelSel.addEventListener('change', () => { S.model = modelSel.value; render(); });
+  document.getElementById('fFrom').addEventListener('change', e => {
+    S.from = e.target.value; S.userRange = true; render();
+  });
+  document.getElementById('fTo').addEventListener('change', e => {
+    S.to = e.target.value; S.userRange = true; render();
+  });
+  document.getElementById('fToken').addEventListener('change', e => { S.token = e.target.value; render(); });
+
+  const bProxy = document.getElementById('fSrcProxy');
+  const bAll   = document.getElementById('fSrcAll');
+  function syncSrcBtns() {
+    bProxy.classList.toggle('on', !S.synthetic);
+    bAll.classList.toggle('on', S.synthetic);
+  }
+  bProxy.addEventListener('click', () => { S.synthetic = false; syncSrcBtns(); render(); });
+  bAll.addEventListener('click',   () => { S.synthetic = true;  syncSrcBtns(); render(); });
+  syncSrcBtns();
+
+  document.getElementById('fReset').addEventListener('click', () => {
+    S.app = ''; S.prov = ''; S.model = '';
+    S.from = DATA.dateRange.min; S.to = DATA.dateRange.max;
+    S.synthetic = true; S.token = 'total'; S.userRange = false;
+    appSel.value = ''; modelSel.value = '';
+    document.getElementById('fToken').value = 'total';
+    document.getElementById('fFrom').value = S.from;
+    document.getElementById('fTo').value = S.to;
+    rebuildProv(); syncSrcBtns(); render();
+  });
+
+  window.addEventListener('resize', () => {
+    clearTimeout(window.__rz);
+    window.__rz = setTimeout(render, 140);
+  });
+}
+
+// ════════════════════════════════════════════════════════════
+//  时钟 + 自动刷新
+// ════════════════════════════════════════════════════════════
+/**
+ * 自动刷新间隔（可自定义，见标题栏「刷新间隔」下拉）：
+ *   - 下拉选择    记在 localStorage，下次打开沿用
+ *   - URL 参数    index.html?interval=30   （秒，最小 5；0 表示手动）
+ *   - 全局变量    在 data.js 之前设 window.CC_USAGE_REFRESH_MS
+ *   - 0          禁用自动刷新（时钟仍走，可手动刷新）
+ * 页面经 serve.mjs 打开时会顺带触发服务端 export.mjs；file:// 打开时
+ * 只能重新加载 data.js，数据本身不会变新。
+ */
+const LS_INTERVAL = 'ccTokenUsage.refreshMs';
+
+function loadRefreshMs() {
+  const fromGlobal = Number(window.CC_USAGE_REFRESH_MS);
+  if (Number.isFinite(fromGlobal)) return Math.max(0, fromGlobal);
+
+  const q = new URLSearchParams(location.search).get('interval');
+  if (q !== null && q !== '') {
+    const sec = Number(q);
+    if (Number.isFinite(sec)) return sec <= 0 ? 0 : Math.max(5000, sec * 1000);
+  }
+
+  try {
+    // 注意：getItem 缺省返回 null，Number(null) === 0 会被误判成「手动」，
+    // 必须先判断是否有存过值，否则默认的 5 分钟永远不生效。
+    const raw = localStorage.getItem(LS_INTERVAL);
+    if (raw !== null) {
+      const saved = Number(raw);
+      if (Number.isFinite(saved) && saved >= 0) return saved;
+    }
+  } catch {}
+  return 5 * 60 * 1000;   // 默认 5 分钟
+}
+
+let REFRESH_MS   = loadRefreshMs();   // 0 = 手动（禁用自动刷新）
+const TICK_MS    = 1000;
+
+const refresh = {
+  nextAt:   Date.now() + REFRESH_MS,
+  busy:     false,
+  lastErr:  null,
+};
+/**
+ * 数据刷新后端：
+ *   server —— 页面由 serve.mjs 托管，可让它跑 export.mjs 真正更新数据
+ *   static —— file:// 或其它只读静态托管，只能重新加载 data.js
+ * 启动时探测一次；探测失败按静态模式继续，功能不受影响。
+ */
+const backend = { mode: 'unknown', base: '', checked: false };
+
+/** 双击 HTML 时页面来自 file://，但本机可能正跑着 serve.mjs —— 试一下这些地址 */
+const LOCAL_CANDIDATES = [
+  'http://127.0.0.1:8788/',
+  'http://localhost:8788/',
+];
+
+const $now     = () => document.getElementById('clkNow');
+const $next    = () => document.getElementById('clkNext');
+const $prog    = () => document.getElementById('clkProg');
+const $data    = () => document.getElementById('clkData');
+const $btn     = () => document.getElementById('btnRefresh');
+
+const hhmmss = d => `${pad2(d.getHours())}:${pad2(d.getMinutes())}:${pad2(d.getSeconds())}`;
+
+/**
+ * ping 一个候选地址，确认是不是我们的服务。
+ * 本机可能有多个副本（各自的目录），所以核对服务返回的目录：
+ * file:// 下用页面自身路径推断，http 下用 URL 路径。
+ * @returns {Promise<string|null>} 命中则返回该 base，否则 null
+ */
+async function pingCandidate(base, timeoutMs = 2500) {
+  try {
+    const ctl = new AbortController();
+    const t = setTimeout(() => ctl.abort(), timeoutMs);
+    const r = await fetch(base + 'api/ping', { signal: ctl.signal, cache: 'no-store' });
+    clearTimeout(t);
+    const j = await r.json();
+    if (!j || !j.ok) return null;
+    // 目录校验：对不上说明是别处的副本，宁可不连
+    const want = localDirKey();
+    if (want && j.dir && normalizePath(j.dir) !== want) return null;
+    return base;
+  } catch { return null; }
+}
+
+/** 本页所在目录（规范化）；无法判断时返回 '' */
+function localDirKey() {
+  const p = location.protocol === 'file:'
+    ? decodeURIComponent(location.pathname).replace(/^\/(?=[A-Za-z]:)/, '').replace(/[\\/][^\\/]*$/, '')
+    : null;
+  return p ? normalizePath(p) : '';
+}
+
+/** 统一分隔符与大小写，便于比较路径 */
+const normalizePath = p => String(p).replace(/\//g, '\\').replace(/\\+$/, '').toLowerCase();
+
+/**
+ * 探测可用的刷新后端。
+ * http(s) 打开：先看同源是不是 serve.mjs，再试本机默认端口。
+ * file:// 打开：只能试本机默认端口 —— 命中后依然能自动更新数据。
+ */
+async function detectBackend() {
+  const sameOrigin = location.protocol === 'file:'
+    ? null
+    : location.origin + location.pathname.replace(/[^/]*$/, '');
+
+  const candidates = [];
+  if (sameOrigin) candidates.push(sameOrigin);
+  for (const c of LOCAL_CANDIDATES) if (c !== sameOrigin) candidates.push(c);
+
+  for (const base of candidates) {
+    const hit = await pingCandidate(base);
+    if (hit) {
+      backend.mode = 'server';
+      backend.base = hit;
+      backend.sameOrigin = hit === sameOrigin;
+      break;
+    }
+  }
+  if (backend.mode !== 'server') backend.mode = 'static';
+
+  backend.checked = true;
+  paintBackend();
+  return backend.mode;
+}
+
+/** 顶部「数据来源」标记 */
+function paintBackend() {
+  const el = document.getElementById('clkMode');
+  if (!el) return;
+  if (backend.mode === 'server') {
+    el.className = 'tag live';
+    el.textContent = '实时';
+    el.title = backend.sameOrigin
+      ? '页面由 serve.mjs 托管：打开即更新，到点自动重新导出'
+      : '已连上本机 serve.mjs（' + backend.base + '）：打开即更新，到点自动重新导出';
+  } else if (backend.mode === 'static') {
+    el.className = 'tag static';
+    el.textContent = '静态';
+    el.title = '未检测到本机 serve.mjs 服务：只能重新加载 data.js。'
+      + '双击「启动.bat」（或运行 node serve.mjs）后刷新本页即可自动更新';
+  } else {
+    el.className = 'tag';
+    el.textContent = '';
+  }
+}
+
+// ════════════════════════════════════════════════════════════
+//  刷新间隔（可自定义）
+// ════════════════════════════════════════════════════════════
+/** 手动「刷新」按钮与自动倒计时共用入口：busy 期间不重入 */
+function requestRefresh(auto = false) {
+  if (refresh.busy) return Promise.resolve(false);
+  if (REFRESH_MS) refresh.nextAt = Date.now() + REFRESH_MS;
+  return doRefresh(auto);
+}
+
+/** 切换刷新间隔：立即生效并写入 localStorage，下次打开沿用 */
+function setRefreshMs(ms, persist = true) {
+  REFRESH_MS = ms;
+  refresh.nextAt = ms ? Date.now() + ms : 0;
+  if (persist) { try { localStorage.setItem(LS_INTERVAL, String(ms)); } catch {} }
+  tickClock();
+}
+
+/**
+ * 让服务端跑一次 export.mjs。失败不抛错，交由调用方回退到「只重载 data.js」。
+ * @returns {Promise<boolean>} 是否成功且 data.js 已更新
+ */
+async function runServerExport() {
+  if (backend.mode !== 'server') return false;
+  try {
+    const ctl = new AbortController();
+    const t = setTimeout(() => ctl.abort(), 65000);
+    const r = await fetch(backend.base + 'api/export', { cache: 'no-store', signal: ctl.signal });
+    clearTimeout(t);
+    const j = await r.json().catch(() => null);
+    if (j && j.ok) return true;
+    refresh.lastErr = (j && j.err) || '导出失败';
+  } catch (e) {
+    refresh.lastErr = '无法连接本地服务：'
+      + (e && e.name === 'AbortError' ? '超时' : String((e && e.message) || e));
+  }
+  return false;
+}
+
+/** 剩余毫秒 -> 倒计时文案（mm:ss，超过 1 小时补上小时） */
+function countdownText(ms) {
+  const s0 = Math.max(0, Math.round(ms / 1000));
+  const h = Math.floor(s0 / 3600);
+  const m = Math.floor((s0 % 3600) / 60);
+  const s = s0 % 60;
+  return h ? `${h}:${pad2(m)}:${pad2(s)}` : `${pad2(m)}:${pad2(s)}`;
+}
+
+/** 每秒：更新「现在时间」与「下次刷新」倒计时 */
+function tickClock() {
+  const now = new Date();
+  const nowEl = $now();
+  if (nowEl) nowEl.textContent = hhmmss(now);
+
+  // 自动刷新被禁用
+  if (!REFRESH_MS) {
+    const nxEl = $next(); if (nxEl) nxEl.textContent = '已关闭';
+    const p = $prog();    if (p) p.style.width = '0%';
+    return;
+  }
+
+  const left = Math.max(0, refresh.nextAt - now.getTime());
+  const nxEl = $next();
+  if (nxEl) nxEl.textContent = countdownText(left);
+
+  const p = $prog();
+  if (p) p.style.width = (100 - (left / REFRESH_MS) * 100).toFixed(1) + '%';
+
+  if (left <= 0 && !refresh.busy) {
+    refresh.nextAt = Date.now() + REFRESH_MS;   // 立刻推后，避免连续触发
+    requestRefresh(true);
+  }
+}
+
+/** 刷新成功后按钮短暂变绿，给出反馈 */
+function flashBtn() {
+  const b = $btn();
+  if (!b || b.dataset.flash === '1') return;
+  b.dataset.flash = '1';
+  b.style.borderColor = '#86d29b';
+  b.style.background  = '#f0fbf3';
+  setTimeout(() => {
+    b.style.borderColor = '';
+    b.style.background  = '';
+    delete b.dataset.flash;
+  }, 700);
+}
+
+/**
+ * 刷新数据并重绘。
+ * 服务模式下先让 serve.mjs 跑一次 export.mjs（重写 data.js），
+ * 再重新加载 data.js —— 用 <script> 动态注入（带时间戳绕开缓存），
+ * file:// 下也能用（不能用 fetch/XHR）。
+ * 服务不可用时退化为「只重新加载 data.js」，不阻塞页面。
+ */
+async function doRefresh(auto = false) {
+  if (refresh.busy) return Promise.resolve(false);
+  refresh.busy = true;
+
+  const btn = $btn();
+  if (btn) btn.classList.add('busy');
+
+  // 先更新数据源文件（静态模式下这一步直接跳过）
+  await runServerExport();
+
+  return new Promise(resolve => {
+    const s = document.createElement('script');
+    s.src = 'data.js?_=' + Date.now();
+    let settled = false;
+
+    const done = ok => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      s.remove();
+      refresh.busy = false;
+      if (btn) btn.classList.remove('busy');
+      refresh.nextAt = Date.now() + REFRESH_MS;
+      resolve(ok);
+    };
+
+    // 超时保护：10 秒未响应视为失败
+    const timer = setTimeout(() => {
+      refresh.lastErr = 'data.js 加载超时';
+      done(false);
+    }, 10000);
+
+    s.onload = () => {
+      if (!adoptData()) { done(false); return; }
+      try {
+        // 数据换新后区间可能扩展 —— 仅当用户没手动改过时才跟随
+        if (!S.userRange) {
+          S.from = DATA.dateRange.min;
+          S.to   = DATA.dateRange.max;
+          S.__autoFrom = S.from;
+          S.__autoTo   = S.to;
+        }
+        syncDateInputs();
+        refreshMeta();
+        refreshProviders();
+        render();
+        refresh.lastErr = null;
+        paintDataTime();
+        flashBtn();
+      } catch (e) {
+        refresh.lastErr = e.message;
+        console.error('[refresh] 重绘失败:', e);
+      }
+      done(true);
+    };
+
+    s.onerror = () => {
+      refresh.lastErr = 'data.js 加载失败';
+      done(false);
+    };
+
+    document.head.appendChild(s);
+  });
+}
+
+/** 刷新顶部 meta 文案 */
+function refreshMeta() {
+  const el = document.getElementById('meta');
+  if (!el) return;
+  el.innerHTML =
+    `数据导出时间 <b>${esc(DATA.generatedAtLocal)}</b>　·　`
+    + `区间 <b>${esc(DATA.dateRange.min)} ~ ${esc(DATA.dateRange.max)}</b>　·　`
+    + `<b>${fmt(REC.length)}</b> 条记录　·　<b>${DATA.providers.length}</b> 个供应商　·　`
+    + `<b>${DATA.models.length}</b> 个模型`;
+}
+
+/** 数据换新后，重建筛选下拉（保留当前选择） */
+function refreshProviders() {
+  const appSel   = document.getElementById('fApp');
+  const modelSel = document.getElementById('fModel');
+  const provSel  = document.getElementById('fProv');
+  if (!appSel || !modelSel || !provSel) return;
+
+  const keepApp = appSel.value, keepModel = modelSel.value, keepProv = provSel.value;
+
+  appSel.innerHTML = '<option value="">全部</option>';
+  for (const a of DATA.apps) appSel.insertAdjacentHTML('beforeend', `<option value="${esc(a)}">${esc(a)}</option>`);
+  if (DATA.apps.includes(keepApp)) appSel.value = keepApp; else S.app = '';
+
+  modelSel.innerHTML = '<option value="">全部</option>';
+  for (const m of DATA.models) modelSel.insertAdjacentHTML('beforeend', `<option value="${esc(m)}">${esc(m)}</option>`);
+  if (DATA.models.includes(keepModel)) modelSel.value = keepModel; else S.model = '';
+
+  provSel.innerHTML = '<option value="">全部</option>';
+  for (const p of DATA.providers.filter(p => !S.app || p.app === S.app)) {
+    const badge = p.current ? ' ●当前' : '';
+    provSel.insertAdjacentHTML('beforeend',
+      `<option value="${esc(p.id)}">[${esc(p.app)}] ${esc(p.name)}${badge}</option>`);
+  }
+  if ([...provSel.options].some(o => o.value === keepProv)) provSel.value = keepProv; else S.prov = '';
+}
+
+function syncDateInputs() {
+  const f = document.getElementById('fFrom'), t = document.getElementById('fTo');
+  if (!f || !t) return;
+  f.value = S.from; t.value = S.to;
+  f.min = t.min = DATA.dateRange.min;
+  f.max = t.max = DATA.dateRange.max;
+}
+
+/** 顶部「数据时间」：显示导出时刻，陈旧时变橙 */
+function paintDataTime() {
+  const el = $data();
+  if (!el) return;
+  const stamp = DATA.generatedAtLocal || '—';
+  const ageMs = Date.now() - new Date(DATA.generatedAt).getTime();
+  const mins = Math.floor(ageMs / 60000);
+  const stale = mins >= 10;
+  el.textContent = stamp.split(' ')[1] ? stamp.split(' ')[1] : stamp;
+  el.title = `导出时间 ${stamp}（${mins} 分钟前）`;
+  el.style.color = stale ? '#b45309' : '';
+}
+
+// ════════════════════════════════════════════════════════════
+//  启动
+// ════════════════════════════════════════════════════════════
+refreshMeta();
+paintDataTime();
+
+document.getElementById('dbPath').textContent = DATA.dbPath;
+
+const mismatch = DATA.providers.filter(p => p.current !== p.settingCurrent);
+if (mismatch.length) {
+  document.getElementById('warn').innerHTML =
+    `<div class="warn">⚠ 供应商状态不一致：${mismatch.map(p =>
+      `${esc(p.app)}/${esc(p.name)}（is_current=${p.current}，settings=${p.settingCurrent}）`
+    ).join('；')}</div>`;
+}
+
+initControls();
+render();
+
+// 手动刷新
+$btn().addEventListener('click', () => requestRefresh(false));
+
+// 刷新间隔下拉：默认选中当前值（含 URL 参数 / 全局变量给的值）
+(function initIntervalSelect() {
+  const sel = document.getElementById('clkInterval');
+  if (!sel) return;
+  const preset = [...sel.options].map(o => Number(o.value));
+  if (!preset.includes(REFRESH_MS / 1000)) {
+    const opt = document.createElement('option');
+    opt.value = String(REFRESH_MS / 1000);
+    opt.textContent = REFRESH_MS % 1000
+      ? `${(REFRESH_MS / 1000).toFixed(1)} 秒`
+      : (REFRESH_MS % 60000 ? `${REFRESH_MS / 1000} 秒` : `${REFRESH_MS / 60000} 分钟`);
+    sel.insertBefore(opt, sel.options[1]);
+  }
+  sel.value = String(REFRESH_MS / 1000);
+  sel.addEventListener('change', () => setRefreshMs(Number(sel.value) * 1000));
+})();
+
+// 探测刷新后端；连上服务就立刻导出一次（「打开即更新」）
+detectBackend().then(mode => {
+  if (mode === 'server') requestRefresh(true);
+});
+
+// 时钟：每秒更新，5 分钟触发一次自动刷新
+refresh.nextAt = REFRESH_MS ? Date.now() + REFRESH_MS : 0;
+tickClock();
+setInterval(tickClock, TICK_MS);
+
+// 标签页重新可见时若已过期，立即刷新（避免后台节流导致不准）
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible' && REFRESH_MS && Date.now() >= refresh.nextAt && !refresh.busy) {
+    requestRefresh(true);
+  }
+});
+
+})();
+</script>
+</body>
+</html>
+

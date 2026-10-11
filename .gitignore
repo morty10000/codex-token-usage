@@ -1,0 +1,11 @@
+# generated data & runtime artifacts
+data.js
+usage-view.html
+token-usage.html
+*.log
+watchdog.off
+
+# editor / os
+.vscode/
+Thumbs.db
+Desktop.ini
